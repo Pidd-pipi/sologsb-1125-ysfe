@@ -51,6 +51,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const loadAll = useSampleStore((s) => s.loadAll);
   const loaded = useSampleStore((s) => s.loaded);
   const sampleCount = useSampleStore((s) => s.samples.length);
+  const pendingConflictCount = useSampleStore(
+    (s) => s.conflicts.filter((c) => c.status === 'pending').length,
+  );
   const toast = useToastStore();
   const location = useLocation();
 
@@ -77,6 +80,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
               label={`本地档案 ${sampleCount} 份样本`}
               sx={{ bgcolor: 'rgba(255,255,255,0.14)', color: '#f5efe4' }}
             />
+            {pendingConflictCount > 0 ? (
+              <Chip
+                size="small"
+                color="warning"
+                label={`未处理冲突 ${pendingConflictCount}`}
+                title="存在字段级冲突，请到样本详情页选定最终内容"
+              />
+            ) : null}
             <Box sx={{ flex: 1 }} />
             <Typography variant="caption" sx={{ opacity: 0.8 }}>
               数据仅存于本机浏览器 · IndexedDB

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -14,10 +14,12 @@ import {
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useNavigate } from 'react-router-dom';
 import FieldGroup from '../components/common/FieldGroup';
 import CoordinatePicker from '../components/common/CoordinatePicker';
 import { useLocalDraft } from '../hooks/useLocalDraft';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useSampleStore } from '../stores/sampleStore';
 import { useToastStore } from '../stores/uiStore';
 import {
@@ -100,10 +102,13 @@ export default function New() {
 
   const { value, patch, reset, clear, restored } = useLocalDraft<FormDraft>('sample-new', initial);
   const [errors, setErrors] = useState<string[]>([]);
+  const saveAction = useAsyncAction();
+  // 记录已创建的样本 id：若样本已建而发现地写入失败，重试时从上次位置继续，不重复建样本
+  const createdSampleIdRef = useRef<string | null>(null);
 
   const coordError = value.withFind ? validateCoordinate(value.longitude, value.latitude) : null;
 
-  const submit = async () => {
+  const validate = (): string[] => {
     const list: string[] = [];
     if (!value.sampleNo.trim()) list.push('样本编号不能为空');
     if (!(value.totalWeight > 0)) list.push('总重量需大于 0 g');
@@ -115,36 +120,48 @@ export default function New() {
         list.push('经纬度超出合法范围');
       }
     }
+    return list;
+  };
+
+  const submit = () => {
+    const list = validate();
     setErrors(list);
-    if (list.length) return;
+    if (list.length) return; // 校验失败：草稿保留，不进入保存流程
 
-    const sampleId = await addSample({
-      sampleNo: value.sampleNo.trim(),
-      totalWeight: Number(value.totalWeight),
-      category: value.category,
-      chemicalGroup: value.chemicalGroup,
-      weathering: value.weathering,
-      fallOrFind: value.fallOrFind,
-      storage: value.storage,
-      note: value.note.trim() || undefined,
+    void saveAction.run(async () => {
+      let sampleId = createdSampleIdRef.current;
+      if (!sampleId) {
+        sampleId = await addSample({
+          sampleNo: value.sampleNo.trim(),
+          totalWeight: Number(value.totalWeight),
+          category: value.category,
+          chemicalGroup: value.chemicalGroup,
+          weathering: value.weathering,
+          fallOrFind: value.fallOrFind,
+          storage: value.storage,
+          note: value.note.trim() || undefined,
+        });
+        createdSampleIdRef.current = sampleId;
+      }
+
+      if (value.withFind) {
+        await addFind({
+          sampleId,
+          placeName: value.placeName.trim(),
+          region: value.region.trim(),
+          longitude: Number(value.longitude),
+          latitude: Number(value.latitude),
+          coordinateSource: value.coordinateSource,
+          environment: value.environment,
+          finder: value.finder.trim() || '未署名',
+        });
+      }
+
+      createdSampleIdRef.current = null;
+      clear();
+      notify(`已登记样本 ${value.sampleNo.trim()}`);
+      navigate(`/samples/${sampleId}`);
     });
-
-    if (value.withFind) {
-      await addFind({
-        sampleId,
-        placeName: value.placeName.trim(),
-        region: value.region.trim(),
-        longitude: Number(value.longitude),
-        latitude: Number(value.latitude),
-        coordinateSource: value.coordinateSource,
-        environment: value.environment,
-        finder: value.finder.trim() || '未署名',
-      });
-    }
-
-    clear();
-    notify(`已登记样本 ${value.sampleNo.trim()}`);
-    navigate(`/samples/${sampleId}`);
   };
 
   return (
@@ -388,13 +405,37 @@ export default function New() {
         </Grid>
       </Grid>
 
-      <Stack direction="row" spacing={1.5}>
-        <Button variant="contained" startIcon={<SaveIcon />} onClick={submit} id="save-sample">
-          保存样本档案
+      <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap">
+        <Button
+          variant="contained"
+          startIcon={<SaveIcon />}
+          onClick={submit}
+          id="save-sample"
+          disabled={saveAction.pending}
+        >
+          {saveAction.pending ? '保存中…' : '保存样本档案'}
         </Button>
-        <Button variant="outlined" startIcon={<RestartAltIcon />} onClick={reset}>
+        <Button variant="outlined" startIcon={<RestartAltIcon />} onClick={reset} disabled={saveAction.pending}>
           清空并重置草稿
         </Button>
+        {saveAction.error ? (
+          <Alert
+            severity="error"
+            sx={{ flex: '1 1 100%' }}
+            action={
+              <Button
+                color="inherit"
+                size="small"
+                startIcon={<RefreshIcon />}
+                onClick={() => submit()}
+              >
+                重试
+              </Button>
+            }
+          >
+            保存失败：{saveAction.error}。原草稿已保留，可从上次位置直接重试。
+          </Alert>
+        ) : null}
       </Stack>
     </Stack>
   );

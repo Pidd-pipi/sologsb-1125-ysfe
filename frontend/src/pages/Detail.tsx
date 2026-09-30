@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Chip,
+  Collapse,
   Divider,
   FormControl,
   Grid,
@@ -17,13 +18,20 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import EditIcon from '@mui/icons-material/Edit';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 import SampleCard from '../components/common/SampleCard';
 import FieldGroup from '../components/common/FieldGroup';
 import ClassificationBadge from '../components/common/Badge';
 import EmptyState from '../components/common/EmptyState';
+import ConflictPanel from '../components/conflict/ConflictPanel';
+import SampleEditForm from '../components/conflict/SampleEditForm';
+import FindEditForm from '../components/conflict/FindEditForm';
 import { useSampleStore } from '../stores/sampleStore';
 import { useToastStore } from '../stores/uiStore';
+import { useAsyncAction } from '../hooks/useAsyncAction';
+import { formatFieldValue } from '../utils/merge';
 import {
   ANALYSIS_METHODS,
   ANALYSIS_METHOD_LABELS,
@@ -62,12 +70,42 @@ export default function Detail() {
   const addSection = useSampleStore((s) => s.addSection);
   const addAnalysis = useSampleStore((s) => s.addAnalysis);
   const updateSample = useSampleStore((s) => s.updateSample);
+  const conflicts = useSampleStore((s) => s.conflicts);
   const notify = useToastStore((s) => s.notify);
+
+  const [editingSample, setEditingSample] = useState(false);
+  const [editingFind, setEditingFind] = useState(false);
 
   const sample = useMemo(() => samples.find((s) => s.id === id), [samples, id]);
   const find = useMemo(() => finds.find((f) => f.sampleId === id), [finds, id]);
   const mySections = useMemo(() => sections.filter((s) => s.sampleId === id), [sections, id]);
   const myAnalysis = useMemo(() => analysis.filter((a) => a.sampleId === id), [analysis, id]);
+
+  /** 与本样本（含其发现地）相关的未处理冲突 */
+  const relatedConflicts = useMemo(
+    () =>
+      conflicts.filter(
+        (c) =>
+          c.status === 'pending' &&
+          ((c.table === 'samples' && c.recordId === id) ||
+            (c.table === 'finds' && c.recordId === find?.id)),
+      ),
+    [conflicts, id, find?.id],
+  );
+
+  /** 合并结果提示：已合并 N 项 / 有 M 项冲突待选 */
+  const reportMerge = (outcome: { mergedCount: number; conflicted: boolean }) => {
+    if (outcome.conflicted) {
+      notify(
+        `已合并 ${outcome.mergedCount} 项；有字段与另一方冲突，请在下方选定最终内容`,
+        'warning',
+      );
+    } else if (outcome.mergedCount > 0) {
+      notify(`已保存并合并 ${outcome.mergedCount} 项修改`);
+    } else {
+      notify('未检测到需要保存的改动', 'info');
+    }
+  };
 
   const [sectionDraft, setSectionDraft] = useState({
     sectionNo: '',
@@ -86,6 +124,10 @@ export default function Detail() {
     testedAt: new Date().toISOString().slice(0, 10),
   });
 
+  // 就地新增切片 / 检测的保存动作：失败时保留草稿并可重试
+  const sectionAction = useAsyncAction();
+  const analysisAction = useAsyncAction();
+
   if (!sample) {
     return (
       <Stack spacing={2}>
@@ -103,34 +145,38 @@ export default function Detail() {
   const advice = classifyByAnalysis(analysisDraft);
   const hits = evaluateThresholds(analysisDraft);
 
-  const submitSection = async () => {
-    const no = sectionDraft.sectionNo.trim() || `TS-${new Date().getFullYear()}-${mySections.length + 1}`.padEnd(3, '0');
-    await addSection({
-      sectionNo: no,
-      sampleId: sample.id,
-      thickness: Number(sectionDraft.thickness),
-      preparation: sectionDraft.preparation,
-      minerals: sectionDraft.minerals,
-      micrographs: sectionDraft.micrograph.trim() ? [sectionDraft.micrograph.trim()] : [],
-      quality: sectionDraft.quality,
+  const submitSection = () =>
+    sectionAction.run(async () => {
+      const no =
+        sectionDraft.sectionNo.trim() ||
+        `TS-${new Date().getFullYear()}-${mySections.length + 1}`.padEnd(3, '0');
+      await addSection({
+        sectionNo: no,
+        sampleId: sample.id,
+        thickness: Number(sectionDraft.thickness),
+        preparation: sectionDraft.preparation,
+        minerals: sectionDraft.minerals,
+        micrographs: sectionDraft.micrograph.trim() ? [sectionDraft.micrograph.trim()] : [],
+        quality: sectionDraft.quality,
+      });
+      notify(`已为 ${sample.sampleNo} 新增切片 ${no}`);
+      setSectionDraft((d) => ({ ...d, sectionNo: '', micrograph: '' }));
     });
-    notify(`已为 ${sample.sampleNo} 新增切片 ${no}`);
-    setSectionDraft((d) => ({ ...d, sectionNo: '', micrograph: '' }));
-  };
 
-  const submitAnalysis = async () => {
-    await addAnalysis({
-      sampleId: sample.id,
-      target: 'sample',
-      method: analysisDraft.method,
-      fa: Number(analysisDraft.fa),
-      fs: Number(analysisDraft.fs),
-      ni: Number(analysisDraft.ni),
-      kamaciteBandwidth: Number(analysisDraft.kamaciteBandwidth),
-      testedAt: analysisDraft.testedAt,
+  const submitAnalysis = () =>
+    analysisAction.run(async () => {
+      await addAnalysis({
+        sampleId: sample.id,
+        target: 'sample',
+        method: analysisDraft.method,
+        fa: Number(analysisDraft.fa),
+        fs: Number(analysisDraft.fs),
+        ni: Number(analysisDraft.ni),
+        kamaciteBandwidth: Number(analysisDraft.kamaciteBandwidth),
+        testedAt: analysisDraft.testedAt,
+      });
+      notify(`已为 ${sample.sampleNo} 写入一条检测记录`);
     });
-    notify(`已为 ${sample.sampleNo} 写入一条检测记录`);
-  };
 
   return (
     <Stack spacing={2.5}>
@@ -140,6 +186,8 @@ export default function Detail() {
         </Button>
         <Typography variant="h4">样本详情</Typography>
       </Stack>
+
+      <ConflictPanel conflicts={relatedConflicts} formatValue={formatFieldValue} />
 
       <Grid container spacing={2.5}>
         <Grid item xs={12} md={4}>
@@ -156,16 +204,28 @@ export default function Detail() {
             <Stack spacing={1.5}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
                 <Typography variant="h6">基本信息</Typography>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => {
-                    void updateSample(sample.id, { storage: sample.storage === 'loan-out' ? 'cabinet-a' : 'loan-out' });
-                    notify('已切换存放状态');
-                  }}
-                >
-                  切换存放状态
-                </Button>
+                <Stack direction="row" spacing={1}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<EditIcon />}
+                    onClick={() => setEditingSample((v) => !v)}
+                  >
+                    {editingSample ? '收起编辑' : '编辑'}
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      void updateSample(sample.id, {
+                        storage: sample.storage === 'loan-out' ? 'cabinet-a' : 'loan-out',
+                      });
+                      notify('已切换存放状态');
+                    }}
+                  >
+                    切换存放状态
+                  </Button>
+                </Stack>
               </Stack>
               <ClassificationBadge
                 category={sample.category}
@@ -217,8 +277,30 @@ export default function Detail() {
                   备注：{sample.note}
                 </Typography>
               ) : null}
+              <Collapse in={editingSample}>
+                <SampleEditForm
+                  sample={sample}
+                  onCancel={() => setEditingSample(false)}
+                  onSaved={(outcome) => {
+                    setEditingSample(false);
+                    reportMerge(outcome);
+                  }}
+                />
+              </Collapse>
               <Divider />
-              <Typography variant="h6">发现地摘要</Typography>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Typography variant="h6">发现地摘要</Typography>
+                {find ? (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<EditIcon />}
+                    onClick={() => setEditingFind((v) => !v)}
+                  >
+                    {editingFind ? '收起编辑' : '编辑发现地'}
+                  </Button>
+                ) : null}
+              </Stack>
               {find ? (
                 <Grid container spacing={1.5}>
                   <Grid item xs={6} sm={4}>
@@ -264,11 +346,24 @@ export default function Detail() {
                     <Typography variant="body2">{find.finder}</Typography>
                   </Grid>
                 </Grid>
-              ) : (
+              ) : null}
+              {find ? (
+                <Collapse in={editingFind}>
+                  <FindEditForm
+                    find={find}
+                    onCancel={() => setEditingFind(false)}
+                    onSaved={(outcome) => {
+                      setEditingFind(false);
+                      reportMerge(outcome);
+                    }}
+                  />
+                </Collapse>
+              ) : null}
+              {!find ? (
                 <Alert severity="warning">
                   该样本尚未登记发现地坐标，可返回 <RouterLink to="/samples/new">样本登记</RouterLink> 补录。
                 </Alert>
-              )}
+              ) : null}
             </Stack>
           </Paper>
         </Grid>
@@ -398,14 +493,27 @@ export default function Detail() {
               <Typography variant="caption" color={mineralSum === 100 ? 'success.main' : 'warning.main'}>
                 矿物占比合计 {mineralSum}%（建议合计 100%）
               </Typography>
+              {sectionAction.error ? (
+                <Alert
+                  severity="error"
+                  action={
+                    <Button color="inherit" size="small" startIcon={<RefreshIcon />} onClick={submitSection}>
+                      重试
+                    </Button>
+                  }
+                >
+                  切片保存失败：{sectionAction.error}。草稿已保留，可直接重试。
+                </Alert>
+              ) : null}
               <Button
                 variant="contained"
                 startIcon={<AddIcon />}
                 onClick={submitSection}
                 id="add-section"
+                disabled={sectionAction.pending}
                 sx={{ alignSelf: 'flex-start' }}
               >
-                新增切片
+                {sectionAction.pending ? '保存中…' : '新增切片'}
               </Button>
             </Stack>
           </Paper>
@@ -529,14 +637,27 @@ export default function Detail() {
                 <br />
                 命中说明：{advice.hits.join('；')}
               </Alert>
+              {analysisAction.error ? (
+                <Alert
+                  severity="error"
+                  action={
+                    <Button color="inherit" size="small" startIcon={<RefreshIcon />} onClick={submitAnalysis}>
+                      重试
+                    </Button>
+                  }
+                >
+                  检测记录保存失败：{analysisAction.error}。草稿已保留，可直接重试。
+                </Alert>
+              ) : null}
               <Button
                 variant="contained"
                 startIcon={<AddIcon />}
                 onClick={submitAnalysis}
                 id="add-analysis"
+                disabled={analysisAction.pending}
                 sx={{ alignSelf: 'flex-start' }}
               >
-                写入检测记录
+                {analysisAction.pending ? '保存中…' : '写入检测记录'}
               </Button>
               <Typography variant="caption" color="text.secondary">
                 阈值参考：

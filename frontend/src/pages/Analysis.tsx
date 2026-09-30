@@ -19,10 +19,12 @@ import {
   Typography,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import EmptyState from '../components/common/EmptyState';
 import ClassificationBadge from '../components/common/Badge';
 import FieldGroup from '../components/common/FieldGroup';
 import { useLocalDraft } from '../hooks/useLocalDraft';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useSampleStore } from '../stores/sampleStore';
 import { useToastStore } from '../stores/uiStore';
 import {
@@ -73,6 +75,7 @@ export default function Analysis() {
 
   const { value, patch, reset, clear, restored } = useLocalDraft<AnalysisDraft>('analysis-entry', initial);
   const [error, setError] = useState<string | null>(null);
+  const saveAction = useAsyncAction();
 
   const sampleSections = useMemo(
     () => sections.filter((s) => s.sampleId === value.sampleId),
@@ -83,7 +86,7 @@ export default function Analysis() {
   const advice = classifyByAnalysis(value);
   const outOfRange = hits.filter((h) => !h.inRange);
 
-  const submit = async () => {
+  const submit = () => {
     if (!value.sampleId) {
       setError('请先选择关联样本');
       return;
@@ -93,20 +96,23 @@ export default function Analysis() {
       return;
     }
     setError(null);
-    await addAnalysis({
-      sampleId: value.sampleId,
-      sectionId: value.target === 'section' ? value.sectionId : undefined,
-      target: value.target,
-      method: value.method,
-      fa: Number(value.fa),
-      fs: Number(value.fs),
-      ni: Number(value.ni),
-      kamaciteBandwidth: Number(value.kamaciteBandwidth),
-      testedAt: value.testedAt,
+
+    void saveAction.run(async () => {
+      await addAnalysis({
+        sampleId: value.sampleId,
+        sectionId: value.target === 'section' ? value.sectionId : undefined,
+        target: value.target,
+        method: value.method,
+        fa: Number(value.fa),
+        fs: Number(value.fs),
+        ni: Number(value.ni),
+        kamaciteBandwidth: Number(value.kamaciteBandwidth),
+        testedAt: value.testedAt,
+      });
+      clear();
+      notify('检测记录已写入本地库');
+      patch({ fa: 18.5, fs: 16, ni: 0.8, kamaciteBandwidth: 0.05 });
     });
-    clear();
-    notify('检测记录已写入本地库');
-    patch({ fa: 18.5, fs: 16, ni: 0.8, kamaciteBandwidth: 0.05 });
   };
 
   return (
@@ -253,13 +259,37 @@ export default function Analysis() {
                 />
               </Stack>
 
-              <Stack direction="row" spacing={1.5}>
-                <Button variant="contained" startIcon={<SaveIcon />} onClick={submit} id="save-analysis">
-                  保存检测记录
+              <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap">
+                <Button
+                  variant="contained"
+                  startIcon={<SaveIcon />}
+                  onClick={submit}
+                  id="save-analysis"
+                  disabled={saveAction.pending}
+                >
+                  {saveAction.pending ? '保存中…' : '保存检测记录'}
                 </Button>
-                <Button variant="outlined" onClick={reset}>
+                <Button variant="outlined" onClick={reset} disabled={saveAction.pending}>
                   清空并重置草稿
                 </Button>
+                {saveAction.error ? (
+                  <Alert
+                    severity="error"
+                    sx={{ flex: '1 1 100%' }}
+                    action={
+                      <Button
+                        color="inherit"
+                        size="small"
+                        startIcon={<RefreshIcon />}
+                        onClick={() => submit()}
+                      >
+                        重试
+                      </Button>
+                    }
+                  >
+                    保存失败：{saveAction.error}。原草稿已保留，可从上次位置直接重试。
+                  </Alert>
+                ) : null}
               </Stack>
             </Stack>
           </Paper>

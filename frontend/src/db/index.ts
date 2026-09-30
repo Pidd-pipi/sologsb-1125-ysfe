@@ -3,6 +3,7 @@ import type { MeteoriteSample } from '../types/sample';
 import type { FindRecord } from '../types/find';
 import type { ThinSection } from '../types/section';
 import type { AnalysisRecord } from '../types/analysis';
+import type { RecordConflict } from '../types/conflict';
 
 /** 库名固定为 gbmeteorite-db */
 export const DB_NAME = 'gbmeteorite-db';
@@ -12,12 +13,15 @@ export const DB_NAME = 'gbmeteorite-db';
  *  - v1：建 samples / finds / sections 三张表
  *  - v2：新增 analysis 表，并为 analysis 加 sampleId 索引
  *  - v3：为 samples 补 updatedAt 字段，并按 id 回填旧记录
+ *  - v4：新增 conflicts 表，持久化字段级合并冲突（关页面再打开仍可继续处理）
  */
 export class MeteoriteDB extends Dexie {
   samples!: Table<MeteoriteSample, string>;
   finds!: Table<FindRecord, string>;
   sections!: Table<ThinSection, string>;
   analysis!: Table<AnalysisRecord, string>;
+  /** v4 新增：字段级冲突记录（跨会话持久保留，直到在详情页选定最终值） */
+  conflicts!: Table<RecordConflict, string>;
 
   constructor() {
     super(DB_NAME);
@@ -65,6 +69,15 @@ export class MeteoriteDB extends Dexie {
             }
           });
       });
+
+    this.version(4).stores({
+      samples:
+        'id, sampleNo, category, chemicalGroup, totalWeight, createdAt, updatedAt',
+      finds: 'id, sampleId, region, createdAt',
+      sections: 'id, sectionNo, sampleId, thickness, createdAt',
+      analysis: 'id, sampleId, sectionId, method, testedAt, createdAt',
+      conflicts: 'id, table, recordId, status, updatedAt',
+    });
   }
 }
 

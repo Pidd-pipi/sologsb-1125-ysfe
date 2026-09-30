@@ -3,21 +3,59 @@ import type { MeteoriteSample } from '../types/sample';
 import type { FindRecord } from '../types/find';
 import type { ThinSection } from '../types/section';
 import type { AnalysisRecord } from '../types/analysis';
+import type { FieldConflict } from '../types/conflict';
 
 /** 库名固定为 gbmeteorite-db */
 export const DB_NAME = 'gbmeteorite-db';
+
+/** 需要逐字段合并的字段集合（与 types/conflict 保持一致） */
+export const SAMPLE_STAMP_FIELDS = [
+  'sampleNo',
+  'totalWeight',
+  'category',
+  'chemicalGroup',
+  'weathering',
+  'fallOrFind',
+  'storage',
+  'note',
+] as const;
+
+export const FIND_STAMP_FIELDS = [
+  'placeName',
+  'region',
+  'longitude',
+  'latitude',
+  'coordinateSource',
+  'environment',
+  'finder',
+] as const;
+
+/** 为新建 / 旧记录补齐版本号与逐字段修改时间 */
+export function stampRevision<T extends { updatedAt?: number; createdAt?: number }>(
+  record: T,
+  fields: readonly string[],
+  at?: number,
+): T & { revision: number; fieldUpdatedAt: Record<string, number> } {
+  const ts = at ?? record.updatedAt ?? record.createdAt ?? Date.now();
+  const fieldUpdatedAt: Record<string, number> = {};
+  for (const f of fields) fieldUpdatedAt[f] = ts;
+  return { ...record, revision: 0, fieldUpdatedAt };
+}
 
 /**
  * 版本历史（IndexedDB 升级迁移）：
  *  - v1：建 samples / finds / sections 三张表
  *  - v2：新增 analysis 表，并为 analysis 加 sampleId 索引
  *  - v3：为 samples 补 updatedAt 字段，并按 id 回填旧记录
+ *  - v4：新增 conflicts 表；samples/finds 补 revision 与 fieldUpdatedAt，
+ *        支持多标签页并发保存的字段级合并与冲突裁决
  */
 export class MeteoriteDB extends Dexie {
   samples!: Table<MeteoriteSample, string>;
   finds!: Table<FindRecord, string>;
   sections!: Table<ThinSection, string>;
   analysis!: Table<AnalysisRecord, string>;
+  conflicts!: Table<FieldConflict, string>;
 
   constructor() {
     super(DB_NAME);
@@ -65,6 +103,35 @@ export class MeteoriteDB extends Dexie {
             }
           });
       });
+
+    this.version(4)
+      .stores({
+        samples:
+          'id, sampleNo, category, chemicalGroup, totalWeight, createdAt, updatedAt, revision',
+        finds: 'id, sampleId, region, createdAt, revision',
+        sections: 'id, sectionNo, sampleId, thickness, createdAt',
+        analysis: 'id, sampleId, sectionId, method, testedAt, createdAt',
+        conflicts: 'id, entityType, entityId, sampleId, status, field, createdAt, resolvedAt',
+      })
+      .upgrade(async (tx) => {
+        // v4：旧样本 / 发现记录补齐版本号与逐字段修改时间
+        await tx
+          .table<MeteoriteSample, string>('samples')
+          .toCollection()
+          .modify((sample) => {
+            const stamped = stampRevision(sample, SAMPLE_STAMP_FIELDS);
+            sample.revision = stamped.revision;
+            sample.fieldUpdatedAt = stamped.fieldUpdatedAt;
+          });
+        await tx
+          .table<FindRecord, string>('finds')
+          .toCollection()
+          .modify((find) => {
+            const stamped = stampRevision(find, FIND_STAMP_FIELDS);
+            find.revision = stamped.revision;
+            find.fieldUpdatedAt = stamped.fieldUpdatedAt;
+          });
+      });
   }
 }
 
@@ -83,71 +150,86 @@ export async function seedIfEmpty(): Promise<void> {
   const now = Date.now();
   await db.transaction('rw', db.samples, db.finds, db.sections, db.analysis, async () => {
     await db.samples.bulkAdd([
-      {
-        id: 'sample_seed_1',
-        sampleNo: 'MET-2024-001',
-        totalWeight: 1250.4,
-        category: 'chondrite',
-        chemicalGroup: 'H',
-        weathering: 'W1',
-        fallOrFind: 'find',
-        storage: 'cabinet-a',
-        note: '撒哈拉回收，熔壳完整',
-        createdAt: now - 86400000 * 40,
-        updatedAt: now - 86400000 * 40,
-      },
-      {
-        id: 'sample_seed_2',
-        sampleNo: 'MET-2024-002',
-        totalWeight: 8420,
-        category: 'iron',
-        chemicalGroup: 'IAB',
-        weathering: 'W0',
-        fallOrFind: 'find',
-        storage: 'cabinet-b',
-        note: '八面体结构清晰',
-        createdAt: now - 86400000 * 30,
-        updatedAt: now - 86400000 * 30,
-      },
-      {
-        id: 'sample_seed_3',
-        sampleNo: 'MET-2024-003',
-        totalWeight: 318.9,
-        category: 'achondrite',
-        chemicalGroup: 'ungrouped',
-        weathering: 'W2',
-        fallOrFind: 'fall',
-        storage: 'desiccator',
-        note: '目击坠落，无熔壳',
-        createdAt: now - 86400000 * 18,
-        updatedAt: now - 86400000 * 18,
-      },
+      stampRevision(
+        {
+          id: 'sample_seed_1',
+          sampleNo: 'MET-2024-001',
+          totalWeight: 1250.4,
+          category: 'chondrite',
+          chemicalGroup: 'H',
+          weathering: 'W1',
+          fallOrFind: 'find',
+          storage: 'cabinet-a',
+          note: '撒哈拉回收，熔壳完整',
+          createdAt: now - 86400000 * 40,
+          updatedAt: now - 86400000 * 40,
+        },
+        SAMPLE_STAMP_FIELDS,
+      ),
+      stampRevision(
+        {
+          id: 'sample_seed_2',
+          sampleNo: 'MET-2024-002',
+          totalWeight: 8420,
+          category: 'iron',
+          chemicalGroup: 'IAB',
+          weathering: 'W0',
+          fallOrFind: 'find',
+          storage: 'cabinet-b',
+          note: '八面体结构清晰',
+          createdAt: now - 86400000 * 30,
+          updatedAt: now - 86400000 * 30,
+        },
+        SAMPLE_STAMP_FIELDS,
+      ),
+      stampRevision(
+        {
+          id: 'sample_seed_3',
+          sampleNo: 'MET-2024-003',
+          totalWeight: 318.9,
+          category: 'achondrite',
+          chemicalGroup: 'ungrouped',
+          weathering: 'W2',
+          fallOrFind: 'fall',
+          storage: 'desiccator',
+          note: '目击坠落，无熔壳',
+          createdAt: now - 86400000 * 18,
+          updatedAt: now - 86400000 * 18,
+        },
+        SAMPLE_STAMP_FIELDS,
+      ),
     ]);
     await db.finds.bulkAdd([
-      {
-        id: 'find_seed_1',
-        sampleId: 'sample_seed_1',
-        placeName: 'Dar al Gani 区域',
-        region: '利比亚',
-        longitude: 16.2,
-        latitude: 27.4,
-        coordinateSource: 'gps',
-        environment: 'desert',
-        finder: '野外队 A 组',
-        createdAt: now - 86400000 * 40,
-      },
-      {
-        id: 'find_seed_2',
-        sampleId: 'sample_seed_2',
-        placeName: 'Gobi 南缘',
-        region: '中国 内蒙古',
-        longitude: 108.6,
-        latitude: 42.1,
-        coordinateSource: 'literature',
-        environment: 'desert',
-        finder: '标本室交换',
-        createdAt: now - 86400000 * 30,
-      },
+      stampRevision(
+        {
+          id: 'find_seed_1',
+          sampleId: 'sample_seed_1',
+          placeName: 'Dar al Gani 区域',
+          region: '利比亚',
+          longitude: 16.2,
+          latitude: 27.4,
+          coordinateSource: 'gps',
+          environment: 'desert',
+          finder: '野外队 A 组',
+          createdAt: now - 86400000 * 40,
+        },
+        FIND_STAMP_FIELDS,
+      ),
+      stampRevision(
+        {
+          id: 'find_seed_2',
+          sampleId: 'sample_seed_2',
+          placeName: 'Gobi 南缘',
+          region: '中国 内蒙古',
+          longitude: 108.6,
+          latitude: 42.1,
+          coordinateSource: 'literature',
+          environment: 'desert',
+          finder: '标本室交换',
+          createdAt: now - 86400000 * 30,
+        },
+        FIND_STAMP_FIELDS,
+      ),
     ]);
     await db.sections.bulkAdd([
       {

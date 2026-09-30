@@ -71,8 +71,10 @@ export default function Analysis() {
     [],
   );
 
-  const { value, patch, reset, clear, restored } = useLocalDraft<AnalysisDraft>('analysis-entry', initial);
-  const [error, setError] = useState<string | null>(null);
+  const { value, patch, reset, restored, failed, error, markFailed, succeed } =
+    useLocalDraft<AnalysisDraft>('analysis-entry', initial);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const sampleSections = useMemo(
     () => sections.filter((s) => s.sampleId === value.sampleId),
@@ -85,28 +87,38 @@ export default function Analysis() {
 
   const submit = async () => {
     if (!value.sampleId) {
-      setError('请先选择关联样本');
+      setFormError('请先选择关联样本');
       return;
     }
     if (value.target === 'section' && !value.sectionId) {
-      setError('检测对象为切片时必须选择一张切片');
+      setFormError('检测对象为切片时必须选择一张切片');
       return;
     }
-    setError(null);
-    await addAnalysis({
-      sampleId: value.sampleId,
-      sectionId: value.target === 'section' ? value.sectionId : undefined,
-      target: value.target,
-      method: value.method,
-      fa: Number(value.fa),
-      fs: Number(value.fs),
-      ni: Number(value.ni),
-      kamaciteBandwidth: Number(value.kamaciteBandwidth),
-      testedAt: value.testedAt,
-    });
-    clear();
-    notify('检测记录已写入本地库');
-    patch({ fa: 18.5, fs: 16, ni: 0.8, kamaciteBandwidth: 0.05 });
+    setFormError(null);
+    setSaving(true);
+    try {
+      await addAnalysis({
+        sampleId: value.sampleId,
+        sectionId: value.target === 'section' ? value.sectionId : undefined,
+        target: value.target,
+        method: value.method,
+        fa: Number(value.fa),
+        fs: Number(value.fs),
+        ni: Number(value.ni),
+        kamaciteBandwidth: Number(value.kamaciteBandwidth),
+        testedAt: value.testedAt,
+      });
+      // 保存成功才清理草稿；失败时原封不动保留，关闭页面再打开仍可重试
+      const scrollY = succeed();
+      notify('检测记录已写入本地库');
+      patch({ fa: 18.5, fs: 16, ni: 0.8, kamaciteBandwidth: 0.05 });
+      if (typeof scrollY === 'number') window.scrollTo({ top: scrollY });
+    } catch (err) {
+      markFailed(err instanceof Error ? err.message : '本地库写入异常');
+      notify('保存失败，检测草稿已保留，可从上次位置重试', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -121,7 +133,19 @@ export default function Analysis() {
       {restored ? (
         <Alert severity="info">已从本地草稿恢复上次未提交的检测录入（localStorage 草稿键 analysis-entry）。</Alert>
       ) : null}
-      {error ? <Alert severity="error">{error}</Alert> : null}
+      {failed ? (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => void submit()}>
+              从上次位置重试
+            </Button>
+          }
+        >
+          上次保存失败：{error}。检测草稿与页面位置已保留，重试前内容不会丢失。
+        </Alert>
+      ) : null}
+      {formError ? <Alert severity="error">{formError}</Alert> : null}
 
       <Grid container spacing={2.5}>
         <Grid item xs={12} md={7}>
@@ -254,8 +278,14 @@ export default function Analysis() {
               </Stack>
 
               <Stack direction="row" spacing={1.5}>
-                <Button variant="contained" startIcon={<SaveIcon />} onClick={submit} id="save-analysis">
-                  保存检测记录
+                <Button
+                  variant="contained"
+                  startIcon={<SaveIcon />}
+                  onClick={() => void submit()}
+                  id="save-analysis"
+                  disabled={saving}
+                >
+                  {saving ? '保存中…' : '保存检测记录'}
                 </Button>
                 <Button variant="outlined" onClick={reset}>
                   清空并重置草稿

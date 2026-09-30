@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -17,6 +18,7 @@ import { Link as RouterLink } from 'react-router-dom';
 import SampleCard from '../components/common/SampleCard';
 import EmptyState from '../components/common/EmptyState';
 import { useSampleFilter } from '../hooks/useSampleFilter';
+import { useAllPendingConflicts } from '../hooks/useConflicts';
 import { useSampleStore } from '../stores/sampleStore';
 import { useUiStore } from '../stores/uiStore';
 import {
@@ -25,6 +27,7 @@ import {
   SAMPLE_CATEGORIES,
   CHEMICAL_GROUPS,
 } from '../types/sample';
+import { CONFLICT_ENTITY_LABELS, fieldLabel } from '../types/conflict';
 import { formatWeight } from '../utils/format';
 
 /** `/` 样本总览 */
@@ -34,8 +37,20 @@ export default function Overview() {
   const finds = useSampleStore((s) => s.finds);
   const sections = useSampleStore((s) => s.sections);
   const analysis = useSampleStore((s) => s.analysis);
+  const pendingConflicts = useAllPendingConflicts();
 
   const ui = useUiStore();
+
+  const conflictSamples = useMemo(() => {
+    const map = new Map<string, { sampleId: string; count: number; labels: string[] }>();
+    for (const c of pendingConflicts) {
+      const entry = map.get(c.sampleId) ?? { sampleId: c.sampleId, count: 0, labels: [] };
+      entry.count += 1;
+      entry.labels.push(`${CONFLICT_ENTITY_LABELS[c.entityType]}·${fieldLabel(c.entityType, c.field)}`);
+      map.set(c.sampleId, entry);
+    }
+    return Array.from(map.values());
+  }, [pendingConflicts]);
 
   const findBySample = useMemo(() => new Map(finds.map((f) => [f.sampleId, f])), [finds]);
   const sectionCount = useMemo(() => {
@@ -64,6 +79,39 @@ export default function Overview() {
           登记新样本
         </Button>
       </Stack>
+
+      {conflictSamples.length > 0 ? (
+        <Alert
+          severity="warning"
+          data-testid="overview-conflict-banner"
+          sx={{ alignItems: 'center' }}
+        >
+          <Stack spacing={0.5}>
+            <Typography variant="body2" fontWeight={700}>
+              有 {pendingConflicts.length} 个字段因并发保存产生冲突，涉及 {conflictSamples.length}{' '}
+              块陨石。未裁决字段暂按修改时间最晚的值参与总览、筛选、切片与地点统计，请尽快定稿。
+            </Typography>
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              {conflictSamples.map((cs) => (
+                <Chip
+                  key={cs.sampleId}
+                  size="small"
+                  color="warning"
+                  variant="outlined"
+                  clickable
+                  component={RouterLink}
+                  to={`/samples/${cs.sampleId}`}
+                  label={`${
+                    samples.find((s) => s.id === cs.sampleId)?.sampleNo ?? cs.sampleId
+                  } · ${cs.count} 项（${cs.labels.slice(0, 3).join('、')}${
+                    cs.labels.length > 3 ? '…' : ''
+                  }）`}
+                />
+              ))}
+            </Stack>
+          </Stack>
+        </Alert>
+      ) : null}
 
       <Box
         sx={{

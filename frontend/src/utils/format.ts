@@ -17,6 +17,18 @@ export function formatDate(value: number | string): string {
   return `${y}-${m}-${day}`;
 }
 
+/** 日期 + 时分：冲突裁决需要看到字段具体修改时间 */
+export function formatDateTime(value: number | string): string {
+  const d = typeof value === 'number' ? new Date(value) : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${y}-${m}-${day} ${hh}:${mm}`;
+}
+
 /** 数值保留小数位，空值统一显示为短横线 */
 export function formatNumber(value: number | undefined | null, digits = 2, unit = ''): string {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return '—';

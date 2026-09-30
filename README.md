@@ -23,6 +23,7 @@ docker compose down
 - 纯前端 SPA：**无后端、无数据库服务、无外部 API**
 - 所有数据保存在浏览器本地：业务数据走 **IndexedDB（Dexie，库名 `gbmeteorite-db`）**，表单草稿走 **localStorage**
 - 容器无状态，不挂载任何命名卷；换浏览器即换档案库
+- **多标签页并发安全**：两个页面（如样本详情 + 分析检测）同时保存同一块陨石时按**字段级三路合并**，不再互相覆盖；分歧字段保留双方值与修改时间，由编目员在详情页裁决
 
 ## 技术栈
 
@@ -70,24 +71,32 @@ sologsb-1125/
     ├── vite.config.ts
     ├── public/favicon.svg
     └── src/
-        ├── types/{sample,find,section,analysis}.ts
-        ├── db/index.ts                 # Dexie 封装与 v1→v3 升级迁移
+        ├── types/{sample,find,section,analysis,conflict}.ts
+        ├── db/index.ts                 # Dexie 封装与 v1→v4 升级迁移
+        ├── db/changeBus.ts             # 跨标签页变更通知（BroadcastChannel + 兜底）
         ├── stores/{sampleStore,uiStore}.ts
-        ├── components/common/{SampleCard,Badge,FieldGroup,EmptyState,CoordinatePicker,AppShell}.tsx
-        ├── hooks/{useSampleFilter,useLocalDraft,useRegionStats}.ts
+        ├── components/common/{SampleCard,Badge,FieldGroup,EmptyState,CoordinatePicker,AppShell,ConflictPanel,SampleFieldsEditor,FindFieldsEditor}.tsx
+        ├── hooks/{useSampleFilter,useLocalDraft,useRegionStats,useConflicts}.ts
         ├── pages/{Overview,New,Detail,Sections,Analysis,Locations}.tsx
         ├── router/index.tsx
-        └── utils/{classify,format,geo}.ts
+        └── utils/{classify,format,geo,merge}.ts
 ```
 
 ## 数据存储说明
 
-- **库名**：`gbmeteorite-db`；表：`samples`、`finds`、`sections`、`analysis`
+- **库名**：`gbmeteorite-db`；表：`samples`、`finds`、`sections`、`analysis`、`conflicts`
 - **版本迁移**：
   - v1 建 `samples` / `finds` / `sections`
   - v2 新增 `analysis` 表并加 `sampleId` 索引
   - v3 为 `samples` 补 `updatedAt` 字段并按 id 回填旧记录
-- **草稿**：`/samples/new` 与 `/analysis` 的表单草稿写入 localStorage（键前缀 `gbmeteorite:draft:`），切页自动恢复，提交后清理
+  - v4 新增 `conflicts` 表；`samples` / `finds` 补 `revision`（乐观并发版本）与 `fieldUpdatedAt`（逐字段修改时间），支撑字段级合并
+- **草稿**：`/samples/new`、`/analysis` 与详情页就地表单的草稿写入 localStorage（键前缀 `gbmeteorite:draft:`，信封版本 v2），切页 / 重开自动恢复；**保存失败时草稿与滚动位置原样保留**，页面给出「从上次位置重试」入口，全部成功后才清理
+- **并发保存的字段级合并**：
+  - 每个可编辑表单提交时携带打开时的 `baseRevision` 与字段基准值；服务层（本地 Dexie 事务内重读）做三路合并
+  - 改不同字段：双方修改各自落库；改成相同值：不算冲突；同一字段改成不同值：记入 `conflicts` 表，**双方值 + 来源页面 + 修改时间 + 共同基准值全部保留**
+  - 未裁决字段先按修改时间最晚的候选兜底参与展示与统计；在样本详情页「并发保存冲突」面板逐字段选定最终内容后，该值成为全站唯一内容
+  - 冲突持久化在 IndexedDB，**关掉页面再打开未处理冲突仍在**；删除样本时级联清理
+- **跨标签页实时同步**：保存后经 BroadcastChannel（隐私模式降级为 localStorage storage 事件）通知其他标签页静默重读 IndexedDB，切回标签页时再兜底同步一次
 - 首次打开会灌入 3 份演示样本、2 条发现记录、2 张切片与 2 条检测记录，便于直接体验筛选与打点
 
 ## 环境变量

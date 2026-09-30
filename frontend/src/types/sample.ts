@@ -30,6 +30,10 @@ export interface MeteoriteSample {
   createdAt: number;
   /** v3 升级迁移新增字段 */
   updatedAt: number;
+  /** 乐观并发版本：每次字段级合并落库 +1（v4 新增） */
+  revision: number;
+  /** 逐字段的最近修改时间，用于字段级合并判定（v4 新增） */
+  fieldUpdatedAt: Record<string, number>;
 }
 
 export const CATEGORY_LABELS: Record<SampleCategory, string> = {

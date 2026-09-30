@@ -98,8 +98,10 @@ export default function New() {
     [nextSeq],
   );
 
-  const { value, patch, reset, clear, restored } = useLocalDraft<FormDraft>('sample-new', initial);
+  const { value, patch, reset, restored, failed, error, markFailed, succeed } =
+    useLocalDraft<FormDraft>('sample-new', initial);
   const [errors, setErrors] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
 
   const coordError = value.withFind ? validateCoordinate(value.longitude, value.latitude) : null;
 
@@ -118,33 +120,41 @@ export default function New() {
     setErrors(list);
     if (list.length) return;
 
-    const sampleId = await addSample({
-      sampleNo: value.sampleNo.trim(),
-      totalWeight: Number(value.totalWeight),
-      category: value.category,
-      chemicalGroup: value.chemicalGroup,
-      weathering: value.weathering,
-      fallOrFind: value.fallOrFind,
-      storage: value.storage,
-      note: value.note.trim() || undefined,
-    });
-
-    if (value.withFind) {
-      await addFind({
-        sampleId,
-        placeName: value.placeName.trim(),
-        region: value.region.trim(),
-        longitude: Number(value.longitude),
-        latitude: Number(value.latitude),
-        coordinateSource: value.coordinateSource,
-        environment: value.environment,
-        finder: value.finder.trim() || '未署名',
+    setSaving(true);
+    try {
+      const sampleId = await addSample({
+        sampleNo: value.sampleNo.trim(),
+        totalWeight: Number(value.totalWeight),
+        category: value.category,
+        chemicalGroup: value.chemicalGroup,
+        weathering: value.weathering,
+        fallOrFind: value.fallOrFind,
+        storage: value.storage,
+        note: value.note.trim() || undefined,
       });
-    }
 
-    clear();
-    notify(`已登记样本 ${value.sampleNo.trim()}`);
-    navigate(`/samples/${sampleId}`);
+      if (value.withFind) {
+        await addFind({
+          sampleId,
+          placeName: value.placeName.trim(),
+          region: value.region.trim(),
+          longitude: Number(value.longitude),
+          latitude: Number(value.latitude),
+          coordinateSource: value.coordinateSource,
+          environment: value.environment,
+          finder: value.finder.trim() || '未署名',
+        });
+      }
+
+      // 两步全部成功后才清理草稿；任何一步失败都保留原草稿与位置以便重试
+      succeed();
+      notify(`已登记样本 ${value.sampleNo.trim()}`);
+      navigate(`/samples/${sampleId}`);
+    } catch (err) {
+      markFailed(err instanceof Error ? err.message : '本地库写入异常');
+      notify('保存失败，登记草稿已保留，可从上次位置重试', 'error');
+      setSaving(false);
+    }
   };
 
   return (
@@ -159,6 +169,18 @@ export default function New() {
       {restored ? (
         <Alert severity="info">
           已从本地草稿恢复上次未提交的录入内容（localStorage：gbmeteorite:draft:sample-new）。
+        </Alert>
+      ) : null}
+      {failed ? (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => void submit()}>
+              从上次位置重试
+            </Button>
+          }
+        >
+          上次保存失败：{error}。登记草稿与页面位置已保留，重试前内容不会丢失。
         </Alert>
       ) : null}
       {errors.length ? (
@@ -389,8 +411,14 @@ export default function New() {
       </Grid>
 
       <Stack direction="row" spacing={1.5}>
-        <Button variant="contained" startIcon={<SaveIcon />} onClick={submit} id="save-sample">
-          保存样本档案
+        <Button
+          variant="contained"
+          startIcon={<SaveIcon />}
+          onClick={() => void submit()}
+          id="save-sample"
+          disabled={saving}
+        >
+          {saving ? '保存中…' : '保存样本档案'}
         </Button>
         <Button variant="outlined" startIcon={<RestartAltIcon />} onClick={reset}>
           清空并重置草稿

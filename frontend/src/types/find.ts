@@ -22,6 +22,10 @@ export interface FindRecord {
   /** 发现者 */
   finder: string;
   createdAt: number;
+  /** 乐观并发版本：每次字段级合并落库 +1（v4 新增） */
+  revision: number;
+  /** 逐字段的最近修改时间，用于字段级合并判定（v4 新增） */
+  fieldUpdatedAt: Record<string, number>;
 }
 
 export const COORDINATE_SOURCE_LABELS: Record<CoordinateSource, string> = {

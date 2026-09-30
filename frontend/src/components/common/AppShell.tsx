@@ -19,8 +19,10 @@ import {
 } from '@mui/material';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import PublicIcon from '@mui/icons-material/Public';
+import ConflictIcon from '@mui/icons-material/GppMaybe';
 import { useSampleStore } from '../../stores/sampleStore';
 import { useToastStore } from '../../stores/uiStore';
+import { changeBus } from '../../db/changeBus';
 
 const DRAWER_WIDTH = 232;
 
@@ -49,14 +51,36 @@ const NAV = [
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loadAll = useSampleStore((s) => s.loadAll);
+  const refresh = useSampleStore((s) => s.refresh);
   const loaded = useSampleStore((s) => s.loaded);
   const sampleCount = useSampleStore((s) => s.samples.length);
+  const pendingConflicts = useSampleStore((s) => s.conflicts.length);
   const toast = useToastStore();
   const location = useLocation();
 
   useEffect(() => {
     if (!loaded) void loadAll();
   }, [loaded, loadAll]);
+
+  // 另一标签页保存后静默拉取同一库内容；切回本标签页时兜底再同步一次
+  useEffect(() => {
+    if (!changeBus) return;
+    const unsubscribe = changeBus.subscribe(() => {
+      void refresh();
+    });
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      unsubscribe();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [refresh]);
+
+  const conflictTarget = pendingConflicts ? `/samples/${useSampleStore.getState().conflicts[0]?.sampleId ?? ''}` : '/';
 
   return (
     <ThemeProvider theme={theme}>
@@ -77,6 +101,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
               label={`本地档案 ${sampleCount} 份样本`}
               sx={{ bgcolor: 'rgba(255,255,255,0.14)', color: '#f5efe4' }}
             />
+            {pendingConflicts > 0 ? (
+              <Chip
+                component={RouterLink}
+                to={conflictTarget}
+                clickable
+                size="small"
+                color="warning"
+                icon={<ConflictIcon />}
+                label={`${pendingConflicts} 个字段冲突待裁决`}
+              />
+            ) : null}
             <Box sx={{ flex: 1 }} />
             <Typography variant="caption" sx={{ opacity: 0.8 }}>
               数据仅存于本机浏览器 · IndexedDB
